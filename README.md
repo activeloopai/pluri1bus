@@ -28,7 +28,7 @@ Plus automatic hooks:
 If you have [deeplake CLI](https://github.com/activeloopai/deeplake) installed, the plugin auto-detects your mounts from `~/.deeplake/mounts.json`. Memory files are read/written directly on the mounted filesystem.
 
 ```bash
-npm install -g deeplake
+curl -fsSL https://deeplake.ai/install.sh | bash
 deeplake init
 # Plugin auto-detects the mount — no config needed
 ```
