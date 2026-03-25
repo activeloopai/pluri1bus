@@ -1,5 +1,5 @@
 {
-  "id": "memory-deeplake",
+  "id": "deeplake-memory",
   "kind": "memory",
   "name": "DeepLake Memory",
   "description": "Cloud-backed agent memory powered by DeepLake — vector search, BM25, and hybrid retrieval with auto-capture and auto-recall",

@@ -45,7 +45,7 @@ function resolveBackend(config: PluginConfig): MemoryBackend {
   if (!apiKey) {
     throw new Error(
       "DeepLake API key required for SDK mode. " +
-      "Set plugins.memory-deeplake.apiKey or DEEPLAKE_API_KEY env var."
+      "Set plugins.deeplake-memory.apiKey or DEEPLAKE_API_KEY env var."
     );
   }
 
@@ -73,7 +73,7 @@ async function getBackend(config: PluginConfig): Promise<MemoryBackend> {
 }
 
 export default definePluginEntry({
-  id: "memory-deeplake",
+  id: "deeplake-memory",
   name: "DeepLake Memory",
   description: "Cloud-backed agent memory with vector + BM25 search",
   kind: "memory",

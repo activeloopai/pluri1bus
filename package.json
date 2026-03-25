@@ -1,5 +1,5 @@
 {
-  "name": "memory-deeplake",
+  "name": "deeplake-memory",
   "version": "0.1.0",
   "type": "module",
   "description": "DeepLake memory plugin for OpenClaw — persistent cloud-backed agent memory with vector + BM25 search",
@@ -7,13 +7,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/activeloopai/memory-deeplake"
+    "url": "https://github.com/activeloopai/deeplake-memory"
   },
   "homepage": "https://deeplake.ai",
   "openclaw": {
     "extensions": ["./dist/index.js"],
     "install": {
-      "npmSpec": "memory-deeplake",
+      "npmSpec": "deeplake-memory",
       "minHostVersion": ">=2026.3.22"
     }
   },

@@ -1,11 +1,11 @@
-# memory-deeplake
+# deeplake-memory
 
 DeepLake memory plugin for [OpenClaw](https://openclaw.ai) — persistent cloud-backed agent memory with vector + BM25 search.
 
 ## Install
 
 ```bash
-openclaw plugins install memory-deeplake
+openclaw plugins install deeplake-memory
 ```
 
 This automatically sets DeepLake as your memory backend. Restart the gateway to apply.
@@ -42,7 +42,7 @@ Without a FUSE mount, the plugin uses DeepLake's managed API directly. Set your 
 export DEEPLAKE_API_KEY=dl_xxx
 
 # Or in openclaw config
-openclaw config set plugins.entries.memory-deeplake.config.apiKey "dl_xxx"
+openclaw config set plugins.entries.deeplake-memory.config.apiKey "dl_xxx"
 ```
 
 ### Auto mode (default)
@@ -54,7 +54,7 @@ The plugin checks for existing FUSE mounts first. If found, uses CLI mode. Other
 All config is optional — the plugin works with zero config if deeplake CLI is installed.
 
 ```json5
-// In openclaw.json → plugins.entries.memory-deeplake.config
+// In openclaw.json → plugins.entries.deeplake-memory.config
 {
   "mode": "auto",           // "auto" | "sdk" | "cli"
   "apiKey": "dl_xxx",       // DeepLake API key (SDK mode)
