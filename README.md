@@ -8,14 +8,22 @@ DeepLake memory plugin for [OpenClaw](https://openclaw.ai) — persistent cloud-
 openclaw plugins install deeplake-memory
 ```
 
-This automatically sets DeepLake as your memory backend. Restart the gateway to apply.
+Then enable the write tool:
+
+```json5
+// In openclaw.json
+{ "tools": { "alsoAllow": ["memory_store"] } }
+```
+
+Restart the gateway to apply.
 
 ## How it works
 
-The plugin replaces OpenClaw's default memory with DeepLake-backed storage. It provides two tools to the agent:
+The plugin replaces OpenClaw's default memory with DeepLake-backed storage. It provides three tools to the agent:
 
 - **memory_search** — semantic search over stored memories (BM25 text search)
 - **memory_get** — read a specific memory file by path
+- **memory_store** — write to a memory file in DeepLake
 
 Plus automatic hooks:
 - **Auto-recall** — injects relevant memories before each agent turn

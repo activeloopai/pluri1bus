@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import type { MemoryBackend, MemoryEntry, SearchResult } from "./types.js";
 
 /**
@@ -10,6 +10,14 @@ import type { MemoryBackend, MemoryEntry, SearchResult } from "./types.js";
  */
 export class CliBackend implements MemoryBackend {
   constructor(private mountPath: string) {}
+
+  private safePath(path: string): string {
+    const full = resolve(this.mountPath, path);
+    if (!full.startsWith(resolve(this.mountPath))) {
+      throw new Error(`Path traversal rejected: ${path}`);
+    }
+    return full;
+  }
 
   async init(): Promise<void> {
     if (!existsSync(this.mountPath)) {
@@ -26,13 +34,13 @@ export class CliBackend implements MemoryBackend {
   }
 
   async write(path: string, content: string): Promise<void> {
-    const fullPath = join(this.mountPath, path);
+    const fullPath = this.safePath(path);
     mkdirSync(dirname(fullPath), { recursive: true });
     writeFileSync(fullPath, content);
   }
 
   async read(path: string, startLine?: number, numLines?: number): Promise<string> {
-    const fullPath = join(this.mountPath, path);
+    const fullPath = this.safePath(path);
     if (!existsSync(fullPath)) return "";
     const content = readFileSync(fullPath, "utf-8");
     if (startLine === undefined) return content;
@@ -81,19 +89,17 @@ export class CliBackend implements MemoryBackend {
 
   async list(): Promise<string[]> {
     const files: string[] = [];
-    const walk = (dir: string, prefix: string) => {
-      if (!existsSync(dir)) return;
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name.startsWith(".")) continue;
-        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-        if (entry.isDirectory()) {
-          walk(join(dir, entry.name), rel);
-        } else if (entry.name.endsWith(".md")) {
-          files.push(rel);
+    // Only index MEMORY.md and memory/ directory — not the entire mount
+    const memoryMd = join(this.mountPath, "MEMORY.md");
+    if (existsSync(memoryMd)) files.push("MEMORY.md");
+    const memoryDir = join(this.mountPath, "memory");
+    if (existsSync(memoryDir)) {
+      for (const entry of readdirSync(memoryDir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith(".md")) {
+          files.push(`memory/${entry.name}`);
         }
       }
-    };
-    walk(this.mountPath, "");
+    }
     return files;
   }
 

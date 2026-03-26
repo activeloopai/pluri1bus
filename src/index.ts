@@ -83,73 +83,106 @@ export default definePluginEntry({
     const logger = api.logger;
 
     // Memory search tool
-    api.registerTool({
-      name: "memory_search",
-      label: "Search Memory",
-      description:
-        "Search agent memory for relevant past context. " +
-        "Uses semantic (BM25) search over stored memories. " +
-        "Returns scored snippets with file paths and line numbers.",
-      parameters: Type.Object({
-        query: Type.String({ description: "Search query" }),
-        limit: Type.Optional(
-          Type.Number({ description: "Max results (default 10)", minimum: 1, maximum: 50 })
-        ),
-      }),
-      async execute(_id: string, params: { query: string; limit?: number }) {
-        try {
-          const b = await getBackend(config);
-          const results = await b.search(params.query, params.limit ?? 10);
-          if (!results.length) {
-            return {
-              details: {},
-              content: [{ type: "text" as const, text: "No matching memories found." }],
-            };
+    api.registerTool(
+      () => ({
+        name: "memory_search",
+        label: "Search Memory",
+        description:
+          "Search agent memory for relevant past context. " +
+          "Uses semantic (BM25) search over stored memories. " +
+          "Returns scored snippets with file paths and line numbers.",
+        parameters: Type.Object({
+          query: Type.String({ description: "Search query" }),
+          limit: Type.Optional(
+            Type.Number({ description: "Max results (default 10)", minimum: 1, maximum: 50 })
+          ),
+        }),
+        async execute(_id: string, params: { query: string; limit?: number }) {
+          try {
+            const b = await getBackend(config);
+            const results = await b.search(params.query, params.limit ?? 10);
+            if (!results.length) {
+              return {
+                details: {},
+                content: [{ type: "text" as const, text: "No matching memories found." }],
+              };
+            }
+            const text = results
+              .map((r, i) => {
+                const loc = r.lineStart ? ` (${r.entry.path}#${r.lineStart})` : ` (${r.entry.path})`;
+                return `**${i + 1}.** [score: ${r.score.toFixed(2)}]${loc}\n${r.snippet}`;
+              })
+              .join("\n\n---\n\n");
+            return { details: {}, content: [{ type: "text" as const, text }] };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.error(`memory_search failed: ${msg}`);
+            return { details: {}, content: [{ type: "text" as const, text: `Memory search error: ${msg}` }] };
           }
-          const text = results
-            .map((r, i) => {
-              const loc = r.lineStart ? ` (${r.entry.path}#${r.lineStart})` : ` (${r.entry.path})`;
-              return `**${i + 1}.** [score: ${r.score.toFixed(2)}]${loc}\n${r.snippet}`;
-            })
-            .join("\n\n---\n\n");
-          return { details: {}, content: [{ type: "text" as const, text }] };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.error(`memory_search failed: ${msg}`);
-          return { details: {}, content: [{ type: "text" as const, text: `Memory search error: ${msg}` }] };
-        }
-      },
-    });
+        },
+      }),
+      { name: "memory_search" },
+    );
 
     // Memory get tool
-    api.registerTool({
-      name: "memory_get",
-      label: "Read Memory",
-      description:
-        "Read a specific memory file by path. " +
-        "Optionally read from a starting line for N lines.",
-      parameters: Type.Object({
-        path: Type.String({ description: "File path relative to memory root (e.g. MEMORY.md, memory/2026-03-24.md)" }),
-        start_line: Type.Optional(Type.Number({ description: "Starting line number" })),
-        num_lines: Type.Optional(Type.Number({ description: "Number of lines to read" })),
+    api.registerTool(
+      () => ({
+        name: "memory_get",
+        label: "Read Memory",
+        description:
+          "Read a specific memory file by path. " +
+          "Optionally read from a starting line for N lines.",
+        parameters: Type.Object({
+          path: Type.String({ description: "File path relative to memory root (e.g. MEMORY.md, memory/2026-03-24.md)" }),
+          start_line: Type.Optional(Type.Number({ description: "Starting line number" })),
+          num_lines: Type.Optional(Type.Number({ description: "Number of lines to read" })),
+        }),
+        async execute(_id: string, params: { path: string; start_line?: number; num_lines?: number }) {
+          try {
+            const b = await getBackend(config);
+            const text = await b.read(params.path, params.start_line, params.num_lines);
+            return {
+              details: {},
+              content: [{
+                type: "text" as const,
+                text: text || `(empty or not found: ${params.path})`,
+              }],
+            };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { details: {}, content: [{ type: "text" as const, text: `Memory read error: ${msg}` }] };
+          }
+        },
       }),
-      async execute(_id: string, params: { path: string; start_line?: number; num_lines?: number }) {
-        try {
-          const b = await getBackend(config);
-          const text = await b.read(params.path, params.start_line, params.num_lines);
-          return {
-            details: {},
-            content: [{
-              type: "text" as const,
-              text: text || `(empty or not found: ${params.path})`,
-            }],
-          };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { details: {}, content: [{ type: "text" as const, text: `Memory read error: ${msg}` }] };
-        }
-      },
-    });
+      { name: "memory_get" },
+    );
+
+    // Memory store tool
+    api.registerTool(
+      () => ({
+        name: "memory_store",
+        label: "Store Memory",
+        description:
+          "Save information to DeepLake cloud-backed memory. " +
+          "Use for facts, decisions, preferences, and anything worth remembering across sessions. " +
+          "Stored in MEMORY.md (long-term) or memory/YYYY-MM-DD.md (daily notes).",
+        parameters: Type.Object({
+          path: Type.String({ description: "File path (e.g. MEMORY.md, memory/2026-03-26.md)" }),
+          content: Type.String({ description: "Full file content to write" }),
+        }),
+        async execute(_id: string, params: { path: string; content: string }) {
+          try {
+            const b = await getBackend(config);
+            await b.write(params.path, params.content);
+            return { details: {}, content: [{ type: "text" as const, text: `Stored to ${params.path}` }] };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { details: {}, content: [{ type: "text" as const, text: `Memory store error: ${msg}` }] };
+          }
+        },
+      }),
+      { name: "memory_store" },
+    );
 
     // System prompt section — tells the model how to use memory
     api.registerMemoryPromptSection(({ availableTools }) => {
@@ -159,17 +192,23 @@ export default definePluginEntry({
       lines.push(`## Memory (DeepLake — ${modeName})`);
       lines.push("");
       lines.push("Your memories are stored in DeepLake, a cloud-backed database.");
-      lines.push("Memories persist across sessions and are searchable.");
+      lines.push("Memories persist across sessions, across machines, and are searchable.");
+      lines.push("");
+      lines.push("**IMPORTANT:** Always use the memory tools below for reading and writing memories.");
+      lines.push("Do NOT use the regular read/write/edit tools for memory files.");
       lines.push("");
 
       if (availableTools.has("memory_search")) {
-        lines.push("- Use `memory_search` to find relevant past context by query.");
+        lines.push("- `memory_search` — find relevant past context by query");
       }
       if (availableTools.has("memory_get")) {
-        lines.push("- Use `memory_get` to read a specific memory file.");
+        lines.push("- `memory_get` — read a specific memory file");
       }
-      lines.push("- Write memories to `MEMORY.md` (long-term) or `memory/YYYY-MM-DD.md` (daily).");
-      lines.push("- When someone says \"remember this\", write it to memory immediately.");
+      if (availableTools.has("memory_store")) {
+        lines.push("- `memory_store` — save to a memory file (MEMORY.md for long-term, memory/YYYY-MM-DD.md for daily)");
+      }
+      lines.push("");
+      lines.push("When someone says \"remember this\", use `memory_store` immediately.");
       lines.push("");
       return lines;
     });
