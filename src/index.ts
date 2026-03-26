@@ -7,17 +7,6 @@ import type { MemoryBackend, PluginConfig } from "./types.js";
 import { CliBackend } from "./backend-cli.js";
 import { SdkBackend } from "./backend-sdk.js";
 
-function extractOrgId(token: string): string | undefined {
-  try {
-    const payload = JSON.parse(
-      Buffer.from(token.split(".")[1], "base64").toString()
-    );
-    return payload.org_id ?? payload.orgId;
-  } catch {
-    return undefined;
-  }
-}
-
 function findDeeplakeMount(): string | null {
   try {
     const mountsFile = join(homedir(), ".deeplake", "mounts.json");
@@ -40,25 +29,19 @@ function resolveBackend(config: PluginConfig): MemoryBackend {
     return new CliBackend(mountPath);
   }
 
-  // SDK mode
+  // SDK mode — just needs an API key, ManagedClient handles the rest
   const apiKey = config.apiKey ?? process.env.DEEPLAKE_API_KEY ?? "";
   if (!apiKey) {
     throw new Error(
       "DeepLake API key required for SDK mode. " +
-      "Set plugins.deeplake-memory.apiKey or DEEPLAKE_API_KEY env var."
+      "Set DEEPLAKE_API_KEY env var or plugins.entries.deeplake-memory.config.apiKey"
     );
-  }
-
-  const orgId = extractOrgId(apiKey);
-  if (!orgId) {
-    throw new Error("Could not extract org_id from DeepLake API token.");
   }
 
   return new SdkBackend({
     apiKey,
-    apiUrl: config.apiUrl ?? process.env.DEEPLAKE_API_URL ?? "https://api.deeplake.ai",
-    orgId,
-    workspaceId: config.workspaceId ?? "default",
+    apiUrl: config.apiUrl ?? process.env.DEEPLAKE_API_URL,
+    workspaceId: config.workspaceId,
   });
 }
 

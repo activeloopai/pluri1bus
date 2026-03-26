@@ -1,56 +1,37 @@
+import { ManagedClient, initializeWasm } from "deeplake";
 import type { MemoryBackend, SearchResult } from "./types.js";
 
 const MEMORY_TABLE = "openclaw_memory";
 
-interface SdkConfig {
+export interface SdkConfig {
   apiKey: string;
-  apiUrl: string;
-  orgId: string;
-  workspaceId: string;
+  apiUrl?: string;
+  workspaceId?: string;
 }
 
 /**
- * SDK backend — stores memories in a DeepLake managed table via REST API.
+ * SDK backend — stores memories in a DeepLake managed table via the JS SDK.
  * Uses pg_deeplake's BM25 text search for retrieval.
  * No local filesystem or FUSE dependency needed.
  */
 export class SdkBackend implements MemoryBackend {
-  private config: SdkConfig;
+  private client: ManagedClient;
 
   constructor(config: SdkConfig) {
-    this.config = config;
-  }
-
-  private async request(method: string, path: string, body?: unknown): Promise<unknown> {
-    const url = `${this.config.apiUrl}${path}`;
-    const res = await fetch(url, {
-      method,
-      headers: {
-        "Authorization": `Bearer ${this.config.apiKey}`,
-        "X-Activeloop-Org-Id": this.config.orgId,
-        "Content-Type": "application/json",
-      },
-      body: body ? JSON.stringify(body) : undefined,
+    this.client = new ManagedClient({
+      token: config.apiKey,
+      workspaceId: config.workspaceId ?? "default",
+      apiUrl: config.apiUrl,
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`DeepLake API ${method} ${path}: ${res.status} ${text}`);
-    }
-    return res.json().catch(() => null);
-  }
-
-  private async query(sql: string, params?: unknown[]): Promise<Record<string, unknown>[]> {
-    const path = `/workspaces/${this.config.workspaceId}/tables/query`;
-    const body: Record<string, unknown> = { sql };
-    if (params?.length) body.params = params;
-    const result = await this.request("POST", path, body) as { data?: Record<string, unknown>[] };
-    return result?.data ?? [];
   }
 
   async init(): Promise<void> {
-    // Ensure memory table exists with text search support
+    // @ts-expect-error — installed version requires path arg but runtime default works
+    await initializeWasm();
+
+    // Ensure memory table exists
     try {
-      await this.query(`
+      await this.client.query(`
         CREATE TABLE IF NOT EXISTS ${MEMORY_TABLE} (
           id TEXT PRIMARY KEY,
           path TEXT NOT NULL,
@@ -61,22 +42,20 @@ export class SdkBackend implements MemoryBackend {
         )
       `);
     } catch {
-      // Table might already exist, that's fine
+      // Table might already exist
     }
 
-    // Create text search index if not exists
+    // Create BM25 text search index
     try {
-      await this.query(
-        `CREATE INDEX IF NOT EXISTS idx_${MEMORY_TABLE}_content ON ${MEMORY_TABLE} USING deeplake_index (content)`
-      );
+      await this.client.createIndex(MEMORY_TABLE, "content");
     } catch {
-      // Index might already exist or deeplake_index not available
+      // Index might already exist
     }
   }
 
   async write(path: string, content: string): Promise<void> {
     const id = path.replace(/[^a-zA-Z0-9_-]/g, "_");
-    await this.query(
+    await this.client.query(
       `INSERT INTO ${MEMORY_TABLE} (id, path, content, updated_at)
        VALUES ($1, $2, $3, now())
        ON CONFLICT (id) DO UPDATE SET content = $3, updated_at = now()`,
@@ -86,7 +65,7 @@ export class SdkBackend implements MemoryBackend {
 
   async read(path: string, startLine?: number, numLines?: number): Promise<string> {
     const id = path.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const rows = await this.query(
+    const rows = await this.client.query(
       `SELECT content FROM ${MEMORY_TABLE} WHERE id = $1`,
       [id]
     );
@@ -100,10 +79,10 @@ export class SdkBackend implements MemoryBackend {
   }
 
   async search(query: string, limit = 10): Promise<SearchResult[]> {
-    // Use BM25 text search via deeplake_index
     let rows: Record<string, unknown>[];
     try {
-      rows = await this.query(
+      // BM25 text search via deeplake_index
+      rows = await this.client.query(
         `SELECT id, path, content, category, created_at,
                 content <#> $1 AS score
          FROM ${MEMORY_TABLE}
@@ -113,7 +92,7 @@ export class SdkBackend implements MemoryBackend {
       );
     } catch {
       // Fallback to ILIKE if deeplake_index not available
-      rows = await this.query(
+      rows = await this.client.query(
         `SELECT id, path, content, category, created_at, 1.0 AS score
          FROM ${MEMORY_TABLE}
          WHERE content ILIKE $1
@@ -124,7 +103,6 @@ export class SdkBackend implements MemoryBackend {
 
     return rows.map(row => {
       const content = row.content as string;
-      // Extract snippet around first match
       const idx = content.toLowerCase().indexOf(query.toLowerCase());
       const snippetStart = Math.max(0, idx - 100);
       const snippet = content.slice(snippetStart, snippetStart + 700);
@@ -144,7 +122,7 @@ export class SdkBackend implements MemoryBackend {
   }
 
   async list(): Promise<string[]> {
-    const rows = await this.query(
+    const rows = await this.client.query(
       `SELECT path FROM ${MEMORY_TABLE} ORDER BY updated_at DESC`
     );
     return rows.map(r => r.path as string);
