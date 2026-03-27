@@ -1,10 +1,15 @@
 # deeplake-memory
 
-DeepLake memory plugin for [OpenClaw](https://openclaw.ai) — persistent cloud-backed agent memory with vector + BM25 search.
+Cloud-backed agent memory plugin for [OpenClaw](https://openclaw.ai) powered by [DeepLake](https://deeplake.ai).
 
 ## Install
 
 ```bash
+# Install DeepLake CLI and set up your mount
+curl -fsSL https://deeplake.ai/install.sh | bash
+deeplake init
+
+# Install the OpenClaw plugin
 openclaw plugins install deeplake-memory
 ```
 
@@ -19,60 +24,40 @@ Restart the gateway to apply.
 
 ## How it works
 
-The plugin replaces OpenClaw's default memory with DeepLake-backed storage. It provides three tools to the agent:
+DeepLake provides a cloud-backed FUSE filesystem. Files written to the mount sync to DeepLake's cloud in real-time and persist across sessions, machines, and agents.
 
-- **memory_search** — semantic search over stored memories (BM25 text search)
+The plugin provides three tools:
+
+- **memory_search** — grep-based search over memory files
 - **memory_get** — read a specific memory file by path
-- **memory_store** — write to a memory file in DeepLake
+- **memory_store** — write to a memory file
 
 Plus automatic hooks:
-- **Auto-recall** — injects relevant memories before each agent turn
+- **Auto-recall** — searches and injects relevant memories before each agent turn
 - **Auto-capture** — saves conversation context before compaction
 
-## Backends
-
-### CLI mode (FUSE mount)
-
-If you have [deeplake CLI](https://github.com/activeloopai/deeplake) installed, the plugin auto-detects your mounts from `~/.deeplake/mounts.json`. Memory files are read/written directly on the mounted filesystem.
-
-```bash
-curl -fsSL https://deeplake.ai/install.sh | bash
-deeplake init
-# Plugin auto-detects the mount — no config needed
-```
-
-### SDK mode (REST API)
-
-Without a FUSE mount, the plugin uses DeepLake's managed API directly. Set your API key:
-
-```bash
-# In your environment
-export DEEPLAKE_API_KEY=dl_xxx
-
-# Or in openclaw config
-openclaw config set plugins.entries.deeplake-memory.config.apiKey "dl_xxx"
-```
-
-### Auto mode (default)
-
-The plugin checks for existing FUSE mounts first. If found, uses CLI mode. Otherwise, falls back to SDK mode.
+The plugin auto-detects your DeepLake mount from `~/.deeplake/mounts.json`. No API key or additional config needed.
 
 ## Configuration
 
-All config is optional — the plugin works with zero config if deeplake CLI is installed.
+All config is optional — the plugin works with zero config if DeepLake CLI is installed.
 
 ```json5
 // In openclaw.json → plugins.entries.deeplake-memory.config
 {
-  "mode": "auto",           // "auto" | "sdk" | "cli"
-  "apiKey": "dl_xxx",       // DeepLake API key (SDK mode)
-  "apiUrl": "https://api.deeplake.ai",  // Custom API endpoint
-  "workspaceId": "default", // DeepLake workspace (SDK mode)
-  "mountPath": "/path/to/mount",  // Override FUSE mount path (CLI mode)
-  "autoCapture": true,      // Auto-save memories before compaction
-  "autoRecall": true        // Auto-inject memories before each turn
+  "mountPath": "/path/to/mount",  // Override auto-detected mount path
+  "autoCapture": true,            // Auto-save memories before compaction
+  "autoRecall": true              // Auto-inject memories before each turn
 }
 ```
+
+## Why DeepLake over LanceDB/OpenViking?
+
+- **Cloud-native** — no local server, no local database. Your data lives in DeepLake's cloud.
+- **Zero deps** — no WASM, no S3 SDK, no embedding API keys. Just a filesystem.
+- **Works offline** — FUSE mount caches locally. Syncs when connected.
+- **Works with local models** — no API key needed. Qwen, Llama, etc. all work.
+- **Agent-native** — agents already know how to read/write files. No custom tooling required.
 
 ## License
 

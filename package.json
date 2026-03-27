@@ -24,8 +24,7 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.34.0",
-    "deeplake": "^0.3.25"
+    "@sinclair/typebox": "^0.34.0"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.22"

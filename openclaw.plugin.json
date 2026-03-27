@@ -2,30 +2,12 @@
   "id": "deeplake-memory",
   "kind": "memory",
   "name": "DeepLake Memory",
-  "description": "Cloud-backed agent memory powered by DeepLake — vector search, BM25, and hybrid retrieval with auto-capture and auto-recall",
+  "description": "Cloud-backed agent memory powered by DeepLake — persistent filesystem with grep-based search, auto-capture and auto-recall",
   "uiHints": {
-    "mode": {
-      "label": "Backend Mode",
-      "placeholder": "auto"
-    },
-    "apiKey": {
-      "label": "DeepLake API Key",
-      "sensitive": true,
-      "placeholder": "dl_xxx"
-    },
-    "apiUrl": {
-      "label": "API URL",
-      "advanced": true,
-      "placeholder": "https://api.deeplake.ai"
-    },
-    "workspaceId": {
-      "label": "Workspace ID",
-      "placeholder": "default"
-    },
     "mountPath": {
-      "label": "FUSE Mount Path (CLI mode)",
+      "label": "Mount Path",
       "advanced": true,
-      "placeholder": "~/agent-memory"
+      "placeholder": "Auto-detected from ~/.deeplake/mounts.json"
     },
     "autoCapture": {
       "label": "Auto-Capture"
@@ -38,14 +20,6 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "mode": {
-        "type": "string",
-        "enum": ["auto", "sdk", "cli"],
-        "description": "auto = detect FUSE mount, fall back to SDK"
-      },
-      "apiKey": { "type": "string" },
-      "apiUrl": { "type": "string" },
-      "workspaceId": { "type": "string" },
       "mountPath": { "type": "string" },
       "autoCapture": { "type": "boolean" },
       "autoRecall": { "type": "boolean" }

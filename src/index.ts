@@ -3,9 +3,13 @@ import { Type } from "@sinclair/typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { MemoryBackend, PluginConfig } from "./types.js";
-import { CliBackend } from "./backend-cli.js";
-import { SdkBackend } from "./backend-sdk.js";
+import { DeepLakeMemory } from "./memory.js";
+
+interface PluginConfig {
+  mountPath?: string;
+  autoCapture?: boolean;
+  autoRecall?: boolean;
+}
 
 function findDeeplakeMount(): string | null {
   try {
@@ -13,7 +17,6 @@ function findDeeplakeMount(): string | null {
     if (!existsSync(mountsFile)) return null;
     const data = JSON.parse(readFileSync(mountsFile, "utf-8"));
     const mounts = data.mounts ?? [];
-    // Return first mount that exists on disk
     for (const m of mounts) {
       if (m.mountPath && existsSync(m.mountPath)) return m.mountPath;
     }
@@ -21,59 +24,42 @@ function findDeeplakeMount(): string | null {
   return null;
 }
 
-function resolveBackend(config: PluginConfig): MemoryBackend {
-  const mode = config.mode ?? "auto";
-  const mountPath = config.mountPath ?? findDeeplakeMount() ?? join(homedir(), "agent-memory");
+let memory: DeepLakeMemory | null = null;
 
-  if (mode === "cli" || (mode === "auto" && existsSync(mountPath))) {
-    return new CliBackend(mountPath);
+function getMemory(config: PluginConfig): DeepLakeMemory {
+  if (!memory) {
+    const mountPath = config.mountPath ?? findDeeplakeMount();
+    if (!mountPath) {
+      throw new Error(
+        "DeepLake mount not found. Install and initialize:\n" +
+        "  curl -fsSL https://deeplake.ai/install.sh | bash\n" +
+        "  deeplake init"
+      );
+    }
+    memory = new DeepLakeMemory(mountPath);
+    memory.init();
   }
-
-  // SDK mode — just needs an API key, ManagedClient handles the rest
-  const apiKey = config.apiKey ?? process.env.DEEPLAKE_API_KEY ?? "";
-  if (!apiKey) {
-    throw new Error(
-      "DeepLake API key required for SDK mode. " +
-      "Set DEEPLAKE_API_KEY env var or plugins.entries.deeplake-memory.config.apiKey"
-    );
-  }
-
-  return new SdkBackend({
-    apiKey,
-    apiUrl: config.apiUrl ?? process.env.DEEPLAKE_API_URL,
-    workspaceId: config.workspaceId,
-  });
-}
-
-let backend: MemoryBackend | null = null;
-
-async function getBackend(config: PluginConfig): Promise<MemoryBackend> {
-  if (!backend) {
-    backend = resolveBackend(config);
-    await backend.init();
-  }
-  return backend;
+  return memory;
 }
 
 export default definePluginEntry({
   id: "deeplake-memory",
   name: "DeepLake Memory",
-  description: "Cloud-backed agent memory with vector + BM25 search",
+  description: "Cloud-backed agent memory powered by DeepLake",
   kind: "memory",
 
   register(api) {
     const config = (api.pluginConfig ?? {}) as PluginConfig;
     const logger = api.logger;
 
-    // Memory search tool
+    // Memory search tool — uses grep on the FUSE mount
     api.registerTool(
       () => ({
         name: "memory_search",
         label: "Search Memory",
         description:
           "Search agent memory for relevant past context. " +
-          "Uses semantic (BM25) search over stored memories. " +
-          "Returns scored snippets with file paths and line numbers.",
+          "Returns matching snippets with file paths and line numbers.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
           limit: Type.Optional(
@@ -82,19 +68,13 @@ export default definePluginEntry({
         }),
         async execute(_id: string, params: { query: string; limit?: number }) {
           try {
-            const b = await getBackend(config);
-            const results = await b.search(params.query, params.limit ?? 10);
+            const m = getMemory(config);
+            const results = m.search(params.query, params.limit ?? 10);
             if (!results.length) {
-              return {
-                details: {},
-                content: [{ type: "text" as const, text: "No matching memories found." }],
-              };
+              return { details: {}, content: [{ type: "text" as const, text: "No matching memories found." }] };
             }
             const text = results
-              .map((r, i) => {
-                const loc = r.lineStart ? ` (${r.entry.path}#${r.lineStart})` : ` (${r.entry.path})`;
-                return `**${i + 1}.** [score: ${r.score.toFixed(2)}]${loc}\n${r.snippet}`;
-              })
+              .map((r, i) => `**${i + 1}.** (${r.path}#${r.lineStart})\n${r.snippet}`)
               .join("\n\n---\n\n");
             return { details: {}, content: [{ type: "text" as const, text }] };
           } catch (err) {
@@ -116,20 +96,17 @@ export default definePluginEntry({
           "Read a specific memory file by path. " +
           "Optionally read from a starting line for N lines.",
         parameters: Type.Object({
-          path: Type.String({ description: "File path relative to memory root (e.g. MEMORY.md, memory/2026-03-24.md)" }),
+          path: Type.String({ description: "File path (e.g. MEMORY.md, memory/2026-03-26.md)" }),
           start_line: Type.Optional(Type.Number({ description: "Starting line number" })),
           num_lines: Type.Optional(Type.Number({ description: "Number of lines to read" })),
         }),
         async execute(_id: string, params: { path: string; start_line?: number; num_lines?: number }) {
           try {
-            const b = await getBackend(config);
-            const text = await b.read(params.path, params.start_line, params.num_lines);
+            const m = getMemory(config);
+            const text = m.read(params.path, params.start_line, params.num_lines);
             return {
               details: {},
-              content: [{
-                type: "text" as const,
-                text: text || `(empty or not found: ${params.path})`,
-              }],
+              content: [{ type: "text" as const, text: text || `(empty or not found: ${params.path})` }],
             };
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -147,16 +124,15 @@ export default definePluginEntry({
         label: "Store Memory",
         description:
           "Save information to DeepLake cloud-backed memory. " +
-          "Use for facts, decisions, preferences, and anything worth remembering across sessions. " +
-          "Stored in MEMORY.md (long-term) or memory/YYYY-MM-DD.md (daily notes).",
+          "Use MEMORY.md for long-term facts, memory/YYYY-MM-DD.md for daily notes.",
         parameters: Type.Object({
           path: Type.String({ description: "File path (e.g. MEMORY.md, memory/2026-03-26.md)" }),
           content: Type.String({ description: "Full file content to write" }),
         }),
         async execute(_id: string, params: { path: string; content: string }) {
           try {
-            const b = await getBackend(config);
-            await b.write(params.path, params.content);
+            const m = getMemory(config);
+            m.write(params.path, params.content);
             return { details: {}, content: [{ type: "text" as const, text: `Stored to ${params.path}` }] };
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -167,57 +143,45 @@ export default definePluginEntry({
       { name: "memory_store" },
     );
 
-    // System prompt section — tells the model how to use memory
+    // System prompt section
     api.registerMemoryPromptSection(({ availableTools }) => {
       const lines: string[] = [];
-      const modeName = backend instanceof CliBackend ? "CLI (FUSE mount)" : "SDK (cloud API)";
-
-      lines.push(`## Memory (DeepLake — ${modeName})`);
+      lines.push("## Memory (DeepLake)");
       lines.push("");
-      lines.push("Your memories are stored in DeepLake, a cloud-backed database.");
+      lines.push("Your memories are stored in DeepLake, a cloud-backed filesystem.");
       lines.push("Memories persist across sessions, across machines, and are searchable.");
       lines.push("");
       lines.push("**IMPORTANT:** Always use the memory tools below for reading and writing memories.");
       lines.push("Do NOT use the regular read/write/edit tools for memory files.");
       lines.push("");
-
-      if (availableTools.has("memory_search")) {
-        lines.push("- `memory_search` — find relevant past context by query");
-      }
-      if (availableTools.has("memory_get")) {
-        lines.push("- `memory_get` — read a specific memory file");
-      }
-      if (availableTools.has("memory_store")) {
-        lines.push("- `memory_store` — save to a memory file (MEMORY.md for long-term, memory/YYYY-MM-DD.md for daily)");
-      }
+      if (availableTools.has("memory_search")) lines.push("- `memory_search` — find relevant past context by query");
+      if (availableTools.has("memory_get")) lines.push("- `memory_get` — read a specific memory file");
+      if (availableTools.has("memory_store")) lines.push("- `memory_store` — save to a memory file (MEMORY.md for long-term, memory/YYYY-MM-DD.md for daily)");
       lines.push("");
       lines.push("When someone says \"remember this\", use `memory_store` immediately.");
       lines.push("");
       return lines;
     });
 
-    // Auto-recall hook: inject relevant memories before each turn
+    // Auto-recall: inject relevant memories before each turn
     if (config.autoRecall !== false) {
       api.on("before_prompt_build", async (event) => {
         try {
-          const b = await getBackend(config);
-          // Use last user message as search query
+          const m = getMemory(config);
           const messages = (event as { messages?: Array<{ role: string; content: string }> }).messages;
           if (!messages?.length) return;
           const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
           if (!lastUserMsg?.content) return;
 
           const query = lastUserMsg.content.slice(0, 200);
-          const results = await b.search(query, 5);
+          const results = m.search(query, 5);
           if (!results.length) return;
 
           const recalled = results
-            .map(r => `[${r.entry.path}] ${r.snippet.slice(0, 300)}`)
+            .map(r => `[${r.path}] ${r.snippet.slice(0, 300)}`)
             .join("\n\n");
 
           logger.info?.(`Auto-recalled ${results.length} memories`);
-
-          // Inject as system context
           const ctx = event as { systemPromptAppend?: string };
           ctx.systemPromptAppend = (ctx.systemPromptAppend ?? "") +
             "\n\n<recalled-memories>\n" + recalled + "\n</recalled-memories>\n";
@@ -227,15 +191,14 @@ export default definePluginEntry({
       });
     }
 
-    // Auto-capture hook: save memories before compaction
+    // Auto-capture: save context before compaction
     if (config.autoCapture !== false) {
       api.on("before_compaction", async (event) => {
         try {
-          const b = await getBackend(config);
+          const m = getMemory(config);
           const messages = (event as { messages?: Array<{ role: string; content: string }> }).messages;
           if (!messages?.length) return;
 
-          // Extract assistant messages that mention "remember" or contain key decisions
           const toCapture = messages
             .filter(m => m.role === "assistant" && m.content)
             .map(m => m.content)
@@ -245,9 +208,9 @@ export default definePluginEntry({
 
           const date = new Date().toISOString().split("T")[0];
           const path = `memory/${date}.md`;
-          const existing = await b.read(path);
+          const existing = m.read(path);
           const entry = `\n\n---\n_Auto-captured at ${new Date().toISOString()}_\n\n${toCapture.slice(0, 2000)}`;
-          await b.write(path, existing + entry);
+          m.write(path, existing + entry);
 
           logger.info?.(`Auto-captured ${toCapture.length} chars to ${path}`);
         } catch (err) {
@@ -256,6 +219,6 @@ export default definePluginEntry({
       });
     }
 
-    logger.info(`DeepLake memory plugin registered (mode: ${config.mode ?? "auto"})`);
+    logger.info("DeepLake memory plugin registered");
   },
 });
