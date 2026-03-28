@@ -2,7 +2,7 @@
   "name": "deeplake-memory",
   "version": "0.1.0",
   "type": "module",
-  "description": "DeepLake memory plugin for OpenClaw — persistent cloud-backed agent memory with vector + BM25 search",
+  "description": "DeepLake memory plugin for OpenClaw  persistent cloud-backed agent memory with vector + BM25 search",
   "keywords": ["openclaw", "memory", "deeplake", "agent", "persistent-memory", "vector-search", "bm25"],
   "license": "MIT",
   "repository": {

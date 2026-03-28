@@ -28,19 +28,19 @@ DeepLake provides a cloud-backed FUSE filesystem. Files written to the mount syn
 
 The plugin provides three tools:
 
-- **memory_search** — grep-based search over memory files
-- **memory_get** — read a specific memory file by path
-- **memory_store** — write to a memory file
+- **memory_search**  grep-based search over memory files
+- **memory_get**  read a specific memory file by path
+- **memory_store**  write to a memory file
 
 Plus automatic hooks:
-- **Auto-recall** — searches and injects relevant memories before each agent turn
-- **Auto-capture** — saves conversation context before compaction
+- **Auto-recall**  searches and injects relevant memories before each agent turn
+- **Auto-capture**  saves conversation context before compaction
 
 The plugin auto-detects your DeepLake mount from `~/.deeplake/mounts.json`. No API key or additional config needed.
 
 ## Configuration
 
-All config is optional — the plugin works with zero config if DeepLake CLI is installed.
+All config is optional  the plugin works with zero config if DeepLake CLI is installed.
 
 ```json5
 // In openclaw.json → plugins.entries.deeplake-memory.config
@@ -53,11 +53,11 @@ All config is optional — the plugin works with zero config if DeepLake CLI is 
 
 ## Why DeepLake over LanceDB/OpenViking?
 
-- **Cloud-native** — no local server, no local database. Your data lives in DeepLake's cloud.
-- **Zero deps** — no WASM, no S3 SDK, no embedding API keys. Just a filesystem.
-- **Works offline** — FUSE mount caches locally. Syncs when connected.
-- **Works with local models** — no API key needed. Qwen, Llama, etc. all work.
-- **Agent-native** — agents already know how to read/write files. No custom tooling required.
+- **Cloud-native**  no local server, no local database. Your data lives in DeepLake's cloud.
+- **Zero deps**  no WASM, no S3 SDK, no embedding API keys. Just a filesystem.
+- **Works offline**  FUSE mount caches locally. Syncs when connected.
+- **Works with local models**  no API key needed. Qwen, Llama, etc. all work.
+- **Agent-native**  agents already know how to read/write files. No custom tooling required.
 
 ## License
 

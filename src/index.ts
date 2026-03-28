@@ -1,14 +1,25 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "@sinclair/typebox";
 import { existsSync, readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DeepLakeMemory } from "./memory.js";
+import { DeepLakeMemory, type SearchResult } from "./memory.js";
 
 interface PluginConfig {
   mountPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
+}
+
+function isMountActive(mountPath: string): boolean {
+  try {
+    const mounts = execSync("mount", { encoding: "utf-8", timeout: 3000 }) as string;
+    // Match " on /exact/path " to avoid substring false positives
+    return mounts.includes(` on ${mountPath} `);
+  } catch {
+    return false;
+  }
 }
 
 function findDeeplakeMount(): string | null {
@@ -18,7 +29,7 @@ function findDeeplakeMount(): string | null {
     const data = JSON.parse(readFileSync(mountsFile, "utf-8"));
     const mounts = data.mounts ?? [];
     for (const m of mounts) {
-      if (m.mountPath && existsSync(m.mountPath)) return m.mountPath;
+      if (m.mountPath && existsSync(m.mountPath) && isMountActive(m.mountPath)) return m.mountPath;
     }
   } catch {}
   return null;
@@ -173,8 +184,24 @@ export default definePluginEntry({
           const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
           if (!lastUserMsg?.content) return;
 
-          const query = lastUserMsg.content.slice(0, 200);
-          const results = m.search(query, 5);
+          // Extract keywords (3+ chars, skip stop words) and search each
+          const stopWords = new Set(["the","and","for","are","but","not","you","all","can","had","her","was","one","our","out","has","have","what","does","like","with","this","that","from","they","been","will","more","when","who","how","its","into","some","than","them","these","then","your","just","about","would","could","should","where","which","there","their","being","each","other"]);
+          const words = lastUserMsg.content.toLowerCase()
+            .replace(/[^a-z0-9\s]/g, " ")
+            .split(/\s+/)
+            .filter(w => w.length >= 3 && !stopWords.has(w));
+
+          const allResults: SearchResult[] = [];
+          const seen = new Set<string>();
+          for (const word of words.slice(0, 5)) {
+            for (const r of m.search(word, 3)) {
+              if (!seen.has(r.path)) {
+                seen.add(r.path);
+                allResults.push(r);
+              }
+            }
+          }
+          const results = allResults.slice(0, 5);
           if (!results.length) return;
 
           const recalled = results

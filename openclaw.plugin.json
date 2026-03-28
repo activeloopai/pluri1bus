@@ -2,7 +2,7 @@
   "id": "deeplake-memory",
   "kind": "memory",
   "name": "DeepLake Memory",
-  "description": "Cloud-backed agent memory powered by DeepLake — persistent filesystem with grep-based search, auto-capture and auto-recall",
+  "description": "Cloud-backed agent memory powered by DeepLake  persistent filesystem with grep-based search, auto-capture and auto-recall",
   "uiHints": {
     "mountPath": {
       "label": "Mount Path",
