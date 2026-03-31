@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Pluri1bus — cloud-backed persistent memory for AI agents, powered by DeepLake",
-  "keywords": ["openclaw", "memory", "deeplake", "agent", "persistent-memory", "vector-search", "bm25"],
+  "keywords": ["openclaw", "memory", "deeplake", "agent", "persistent-memory", "shared-memory"],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,9 +23,7 @@
     "prepublishOnly": "npm run build",
     "dev": "tsc --watch"
   },
-  "dependencies": {
-    "@sinclair/typebox": "^0.34.0"
-  },
+  "dependencies": {},
   "peerDependencies": {
     "openclaw": ">=2026.3.22"
   },
