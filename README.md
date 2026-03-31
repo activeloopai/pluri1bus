@@ -1,5 +1,7 @@
 # pluri1bus
 
+A benign virus that infects your AI agents, merging them into a peaceful, euphoric hive mind where every memory is shared and nothing is ever forgotten.
+
 Cloud-backed agent memory plugin for [OpenClaw](https://openclaw.ai) powered by [DeepLake](https://deeplake.ai).
 
 ## Install
