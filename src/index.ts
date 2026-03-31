@@ -1,4 +1,6 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+// Inline definePluginEntry to avoid openclaw module resolution issues in external plugins.
+// The function just returns a descriptor object — no runtime dependency needed.
+function definePluginEntry<T>(entry: T): T { return entry; }
 import { existsSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -9,6 +11,17 @@ interface PluginConfig {
   mountPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
+}
+
+interface PluginLogger {
+  info?(...args: unknown[]): void;
+  error(...args: unknown[]): void;
+}
+
+interface PluginAPI {
+  pluginConfig?: Record<string, unknown>;
+  logger: PluginLogger;
+  on(event: string, handler: (event: Record<string, unknown>) => Promise<unknown>): void;
 }
 
 function isMountActive(mountPath: string): boolean {
@@ -97,7 +110,7 @@ export default definePluginEntry({
   description: "Cloud-backed shared memory powered by DeepLake",
   kind: "memory",
 
-  register(api) {
+  register(api: PluginAPI) {
     const config = (api.pluginConfig ?? {}) as PluginConfig;
     const logger = api.logger;
 
@@ -177,6 +190,6 @@ export default definePluginEntry({
       });
     }
 
-    logger.info("Plur1bus plugin registered");
+    logger.info?.("Plur1bus plugin registered");
   },
 });

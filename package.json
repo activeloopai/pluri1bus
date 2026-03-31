@@ -30,11 +30,7 @@
     "dev": "tsc --watch"
   },
   "dependencies": {},
-  "peerDependencies": {
-    "openclaw": ">=2026.3.22"
-  },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "openclaw": ">=2026.3.22"
+    "typescript": "^5.7.0"
   }
 }
