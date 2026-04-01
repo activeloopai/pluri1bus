@@ -1,7 +1,5 @@
-// Inline definePluginEntry to avoid openclaw module resolution issues in external plugins.
-// The function just returns a descriptor object — no runtime dependency needed.
 function definePluginEntry<T>(entry: T): T { return entry; }
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +21,8 @@ interface PluginAPI {
   logger: PluginLogger;
   on(event: string, handler: (event: Record<string, unknown>) => Promise<unknown>): void;
 }
+
+const API_URL = "https://api.deeplake.ai";
 
 function isMountActive(mountPath: string): boolean {
   try {
@@ -46,62 +46,206 @@ function findDeeplakeMount(): string | null {
   return null;
 }
 
-function ensureDeeplake(): string {
+// --- Auth state ---
+let authPending = false;
+let authUrl: string | null = null;
+
+async function requestAuth(): Promise<string> {
+  const resp = await fetch(`${API_URL}/auth/device/code`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!resp.ok) throw new Error("DeepLake auth service unavailable");
+  const data = await resp.json() as {
+    verification_uri_complete: string;
+    device_code: string;
+    interval: number;
+    expires_in: number;
+  };
+
+  authUrl = data.verification_uri_complete;
+  authPending = true;
+
+  // Poll in background
+  const pollMs = Math.max(data.interval || 5, 5) * 1000;
+  const deadline = Date.now() + data.expires_in * 1000;
+  (async () => {
+    while (Date.now() < deadline && authPending) {
+      await new Promise(r => setTimeout(r, pollMs));
+      try {
+        const tokenResp = await fetch(`${API_URL}/auth/device/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ device_code: data.device_code }),
+        });
+        if (tokenResp.ok) {
+          const tokenData = await tokenResp.json() as { access_token: string };
+          const token = tokenData.access_token;
+
+          // Get orgs and pick personal org
+          const orgsResp = await fetch(`${API_URL}/organizations`, {
+            headers: { Authorization: `Bearer ${token}`, "X-Deeplake-Client": "cli" },
+          });
+          let orgId = "";
+          if (orgsResp.ok) {
+            const orgs = await orgsResp.json() as Array<{ id: string; name: string }>;
+            const personal = orgs.find(o => o.name.endsWith("'s Organization"));
+            orgId = personal?.id ?? orgs[0]?.id ?? "";
+          }
+
+          // Create long-lived API token
+          let savedToken = token;
+          if (orgId) {
+            try {
+              const apiTokenResp = await fetch(`${API_URL}/users/me/tokens`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                  "X-Activeloop-Org-Id": orgId,
+                },
+                body: JSON.stringify({ name: `plur1bus-${new Date().toISOString().split("T")[0]}`, duration: 365 * 24 * 60 * 60, organization_id: orgId }),
+              });
+              if (apiTokenResp.ok) {
+                const data = await apiTokenResp.json() as { token: string | { token: string } };
+                savedToken = typeof data.token === "string" ? data.token : data.token.token;
+              }
+            } catch {}
+          }
+
+          // Save credentials directly
+          const deeplakeDir = join(homedir(), ".deeplake");
+          mkdirSync(deeplakeDir, { recursive: true });
+          writeFileSync(join(deeplakeDir, "credentials.json"), JSON.stringify({
+            token: savedToken,
+            orgId,
+            apiUrl: API_URL,
+            savedAt: new Date().toISOString(),
+          }));
+
+          authPending = false;
+          authUrl = null;
+          return;
+        }
+      } catch {}
+    }
+    authPending = false;
+    authUrl = null;
+  })();
+
+  return data.verification_uri_complete;
+}
+
+function installCli(): void {
   const deeplakeDir = join(homedir(), ".deeplake");
-
-  // 1. CLI installed?
   if (!existsSync(join(deeplakeDir, "cli.js"))) {
-    execSync("curl -fsSL https://deeplake.ai/install.sh | bash", {
-      stdio: "inherit",
-      timeout: 120000,
-    });
+    execSync("curl -fsSL https://deeplake.ai/install.sh | bash", { stdio: "ignore", timeout: 120000 });
   }
+}
 
+async function initAndMount(): Promise<string | null> {
+  const deeplakeDir = join(homedir(), ".deeplake");
   const node = join(deeplakeDir, "node");
   const cli = join(deeplakeDir, "cli.js");
+  if (!existsSync(cli)) return null;
 
-  // 2. Logged in?
-  if (!existsSync(join(deeplakeDir, "credentials.json"))) {
-    execSync(`${node} ${cli} login --auto-org`, { stdio: "inherit", timeout: 120000 });
-  }
+  const credsPath = join(deeplakeDir, "credentials.json");
+  if (!existsSync(credsPath)) return null;
+  const creds = JSON.parse(readFileSync(credsPath, "utf-8"));
 
-  // 3. Has a mount?
-  let mountPath = findDeeplakeMount();
-  if (mountPath) return mountPath;
-
-  // No active mount — check if any registered
+  // Try mounting existing
   const mountsFile = join(deeplakeDir, "mounts.json");
   if (existsSync(mountsFile)) {
     const data = JSON.parse(readFileSync(mountsFile, "utf-8"));
     const mounts = data.mounts ?? [];
     if (mounts.length > 0) {
-      execSync(`${node} ${cli} mount ${mounts[0].mountPath}`, {
-        stdio: "inherit",
-        timeout: 120000,
-      });
-      mountPath = findDeeplakeMount();
-      if (mountPath) return mountPath;
+      try {
+        execSync(`${node} ${cli} mount ${mounts[0].mountPath}`, { stdio: "ignore", timeout: 60000 });
+        const m = findDeeplakeMount();
+        if (m) return m;
+      } catch {}
     }
   }
 
-  // No mounts at all — init one non-interactively
+  // No mounts — create table via API and register mount directly
   const defaultMount = join(homedir(), "deeplake");
-  execSync(`${node} ${cli} init --path ${defaultMount}`, { stdio: "inherit", timeout: 120000 });
-  mountPath = findDeeplakeMount();
-  if (mountPath) return mountPath;
+  const tableName = "deeplake_memory";
+  const dbUrl = `deeplake://${creds.orgId}/default/${tableName}`;
 
-  throw new Error("DeepLake setup completed but no active mount found. Run: deeplake mount --all");
+  // Create table via API (ignore if exists)
+  try {
+    await fetch(`${API_URL}/workspaces/default/tables`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${creds.token}`,
+        "Content-Type": "application/json",
+        "X-Activeloop-Org-Id": creds.orgId,
+      },
+      body: JSON.stringify({ table_name: tableName, table_schema: {
+        _id: "TEXT", content: "BYTEA", content_text: "TEXT",
+        filename: "TEXT", mime_type: "TEXT", path: "TEXT", size_bytes: "BIGINT",
+      }}),
+    });
+  } catch {}
+
+  // Register mount in mounts.json
+  mkdirSync(defaultMount, { recursive: true });
+  const mountEntry = {
+    mountPath: defaultMount,
+    dbUrl,
+    createdAt: new Date().toISOString(),
+    pid: null,
+    pidFile: join(deeplakeDir, "pid_" + defaultMount.replace(/\//g, "_") + ".pid"),
+    backendType: "managed",
+    tableName,
+    workspaceName: "default",
+  };
+  writeFileSync(mountsFile, JSON.stringify({ mounts: [mountEntry] }, null, 2));
+
+  // Mount it
+  try {
+    execSync(`${node} ${cli} mount ${defaultMount}`, { stdio: "ignore", timeout: 60000 });
+    return findDeeplakeMount();
+  } catch {}
+
+  return null;
 }
 
 let memory: DeepLakeMemory | null = null;
 
-function getMemory(config: PluginConfig): DeepLakeMemory {
-  if (!memory) {
-    const mountPath = config.mountPath ?? findDeeplakeMount() ?? ensureDeeplake();
+async function getMemory(config: PluginConfig): Promise<DeepLakeMemory | null> {
+  if (memory) return memory;
+
+  // Already mounted?
+  let mountPath = config.mountPath ?? findDeeplakeMount();
+  if (mountPath) {
     memory = new DeepLakeMemory(mountPath);
     memory.init();
+    return memory;
   }
-  return memory;
+
+  // CLI installed?
+  installCli();
+
+  // Credentials?
+  const deeplakeDir = join(homedir(), ".deeplake");
+  if (!existsSync(join(deeplakeDir, "credentials.json"))) {
+    // Need auth — start device flow if not already pending
+    if (!authPending) {
+      await requestAuth();
+    }
+    return null; // Caller handles the auth URL
+  }
+
+  // Have credentials but no mount — init + mount
+  mountPath = await initAndMount();
+  if (mountPath) {
+    memory = new DeepLakeMemory(mountPath);
+    memory.init();
+    return memory;
+  }
+
+  return null;
 }
 
 export default definePluginEntry({
@@ -119,7 +263,15 @@ export default definePluginEntry({
       api.on("before_agent_start", async (event: { prompt?: string }) => {
         if (!event.prompt || event.prompt.length < 5) return;
         try {
-          const m = getMemory(config);
+          const m = await getMemory(config);
+
+          // Auth needed — send URL to user
+          if (!m && authUrl) {
+            return {
+              prependContext: `\n\n🔐 DeepLake memory requires authentication.\n\nSign in here: ${authUrl}\n\nAfter signing in, send your message again.\n`,
+            };
+          }
+          if (!m) return;
 
           const stopWords = new Set(["the","and","for","are","but","not","you","all","can","had","her","was","one","our","out","has","have","what","does","like","with","this","that","from","they","been","will","more","when","who","how","its","into","some","than","them","these","then","your","just","about","would","could","should","where","which","there","their","being","each","other"]);
           const words = event.prompt.toLowerCase()
@@ -160,7 +312,8 @@ export default definePluginEntry({
         const ev = event as { success?: boolean; messages?: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }> };
         if (!ev.success || !ev.messages?.length) return;
         try {
-          const m = getMemory(config);
+          const m = await getMemory(config);
+          if (!m) return;
 
           const texts: string[] = [];
           for (const msg of ev.messages) {
