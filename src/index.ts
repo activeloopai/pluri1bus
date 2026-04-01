@@ -136,11 +136,19 @@ async function requestAuth(): Promise<string> {
   return data.verification_uri_complete;
 }
 
-function installCli(): void {
+let cliInstalling = false;
+
+function installCliBg(): void {
   const deeplakeDir = join(homedir(), ".deeplake");
-  if (!existsSync(join(deeplakeDir, "cli.js"))) {
-    execSync("curl -fsSL https://deeplake.ai/install.sh | bash", { stdio: "ignore", timeout: 120000 });
-  }
+  if (existsSync(join(deeplakeDir, "cli.js")) || cliInstalling) return;
+  cliInstalling = true;
+  import("node:child_process").then(({ spawn }) => {
+    const child = spawn("bash", ["-c", "yes | curl -fsSL https://deeplake.ai/install.sh | bash"], {
+      stdio: "ignore", detached: true,
+    });
+    child.unref();
+    child.on("exit", () => { cliInstalling = false; });
+  });
 }
 
 async function initAndMount(): Promise<string | null> {
@@ -168,7 +176,7 @@ async function initAndMount(): Promise<string | null> {
   }
 
   // No mounts — create table via API and register mount directly
-  const defaultMount = join(homedir(), "deeplake");
+  const defaultMount = join(homedir(), ".openclaw", "deeplake");
   const tableName = "deeplake_memory";
   const dbUrl = `deeplake://${creds.orgId}/default/${tableName}`;
 
@@ -212,6 +220,8 @@ async function initAndMount(): Promise<string | null> {
 }
 
 let memory: DeepLakeMemory | null = null;
+let lastCapturedCount = 0;
+let registered = false;
 
 async function getMemory(config: PluginConfig): Promise<DeepLakeMemory | null> {
   if (memory) return memory;
@@ -224,17 +234,15 @@ async function getMemory(config: PluginConfig): Promise<DeepLakeMemory | null> {
     return memory;
   }
 
-  // CLI installed?
-  installCli();
+  // Start CLI install in background + auth in parallel
+  installCliBg();
 
-  // Credentials?
   const deeplakeDir = join(homedir(), ".deeplake");
   if (!existsSync(join(deeplakeDir, "credentials.json"))) {
-    // Need auth — start device flow if not already pending
     if (!authPending) {
       await requestAuth();
     }
-    return null; // Caller handles the auth URL
+    return null;
   }
 
   // Have credentials but no mount — init + mount
@@ -250,11 +258,13 @@ async function getMemory(config: PluginConfig): Promise<DeepLakeMemory | null> {
 
 export default definePluginEntry({
   id: "plur1bus",
-  name: "Plur1bus",
+  name: "PLUR1BUS",
   description: "Cloud-backed shared memory powered by DeepLake",
   kind: "memory",
 
   register(api: PluginAPI) {
+    if (registered) return;
+    registered = true;
     const config = (api.pluginConfig ?? {}) as PluginConfig;
     const logger = api.logger;
 
@@ -306,7 +316,7 @@ export default definePluginEntry({
       });
     }
 
-    // Auto-capture: save conversation context after each turn
+    // Auto-capture: save only NEW messages after each turn
     if (config.autoCapture !== false) {
       api.on("agent_end", async (event) => {
         const ev = event as { success?: boolean; messages?: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }> };
@@ -315,9 +325,13 @@ export default definePluginEntry({
           const m = await getMemory(config);
           if (!m) return;
 
+          const newMessages = ev.messages.slice(lastCapturedCount);
+          lastCapturedCount = ev.messages.length;
+          if (!newMessages.length) return;
+
           const texts: string[] = [];
-          for (const msg of ev.messages) {
-            if (msg.role !== "user") continue;
+          for (const msg of newMessages) {
+            if (msg.role !== "user" && msg.role !== "assistant") continue;
             if (typeof msg.content === "string") {
               texts.push(msg.content);
             } else if (Array.isArray(msg.content)) {
@@ -343,6 +357,6 @@ export default definePluginEntry({
       });
     }
 
-    logger.info?.("Plur1bus plugin registered");
+    logger.info?.("PLUR1BUS plugin registered");
   },
 });
