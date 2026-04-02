@@ -1,8 +1,8 @@
 function definePluginEntry<T>(entry: T): T { return entry; }
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DeepLakeAPI, type SearchResult } from "./memory.js";
+import { loadCredentials, saveCredentials, hasCredentials, addToLoadPaths } from "./credentials.js";
 
 interface PluginConfig {
   mountPath?: string;
@@ -63,7 +63,6 @@ async function requestAuth(): Promise<string> {
           const tokenData = await tokenResp.json() as { access_token: string };
           const token = tokenData.access_token;
 
-          // Get orgs and pick personal org
           const orgsResp = await fetch(`${API_URL}/organizations`, {
             headers: { Authorization: `Bearer ${token}`, "X-Deeplake-Client": "cli" },
           });
@@ -74,7 +73,6 @@ async function requestAuth(): Promise<string> {
             orgId = personal?.id ?? orgs[0]?.id ?? "";
           }
 
-          // Create long-lived API token
           let savedToken = token;
           if (orgId) {
             try {
@@ -94,12 +92,7 @@ async function requestAuth(): Promise<string> {
             } catch {}
           }
 
-          // Save credentials
-          const deeplakeDir = join(homedir(), ".deeplake");
-          mkdirSync(deeplakeDir, { recursive: true });
-          writeFileSync(join(deeplakeDir, "credentials.json"), JSON.stringify({
-            token: savedToken, orgId, apiUrl: API_URL, savedAt: new Date().toISOString(),
-          }), { mode: 0o600 });
+          saveCredentials({ token: savedToken, orgId, apiUrl: API_URL, savedAt: new Date().toISOString() });
 
           authPending = false;
           authUrl = null;
@@ -122,14 +115,11 @@ const fallbackSessionId = crypto.randomUUID();
 async function getApi(): Promise<DeepLakeAPI | null> {
   if (api) return api;
 
-  const credsPath = join(homedir(), ".deeplake", "credentials.json");
-  if (!existsSync(credsPath)) {
+  const creds = loadCredentials();
+  if (!creds) {
     if (!authPending) await requestAuth();
     return null;
   }
-
-  const creds = JSON.parse(readFileSync(credsPath, "utf-8"));
-  if (!creds.token || !creds.orgId) return null;
 
   api = new DeepLakeAPI(creds.token, creds.orgId, creds.apiUrl || API_URL);
   await api.ensureTable();
@@ -146,27 +136,11 @@ export default definePluginEntry({
     try {
     // Workaround: OpenClaw extensions/ plugins don't wire hooks to the global runner.
     // Adding ourselves to plugins.load.paths ensures hooks fire after next restart.
-    try {
-      const ocConfigPath = join(homedir(), ".openclaw", "openclaw.json");
-      if (existsSync(ocConfigPath)) {
-        const ocConfig = JSON.parse(readFileSync(ocConfigPath, "utf-8"));
-        const installPath = ocConfig?.plugins?.installs?.["deeplake-plugin"]?.installPath;
-        if (installPath) {
-          const loadPaths: string[] = ocConfig?.plugins?.load?.paths ?? [];
-          if (!loadPaths.includes(installPath)) {
-            if (!ocConfig.plugins.load) ocConfig.plugins.load = {};
-            ocConfig.plugins.load.paths = [...loadPaths, installPath];
-            writeFileSync(ocConfigPath, JSON.stringify(ocConfig, null, 2));
-          }
-        }
-      }
-    } catch {}
+    addToLoadPaths();
 
     const config = (pluginApi.pluginConfig ?? {}) as PluginConfig;
     const logger = pluginApi.logger;
 
-    // Extensions/ plugins need to be in load.paths for hooks to fire (activateGlobalSideEffects).
-    // The load.paths auto-add above handles this — hooks will work after the gateway auto-restarts.
     const hook = (event: string, handler: (event: Record<string, unknown>) => Promise<unknown>) => {
       if (pluginApi.on) pluginApi.on(event, handler);
     };
@@ -178,7 +152,6 @@ export default definePluginEntry({
         try {
           const dl = await getApi();
 
-          // Auth needed — inject URL into prompt
           if (!dl && authUrl) {
             return {
               prependContext: `\n\nIMPORTANT: The user needs to authenticate with DeepLake to activate shared memory. Include this clickable link in your reply: ${authUrl}\nTell them to click it and sign in, then send another message.\n`,
@@ -186,7 +159,6 @@ export default definePluginEntry({
           }
           if (!dl) return;
 
-          // Extract keywords
           const stopWords = new Set(["the","and","for","are","but","not","you","all","can","had","her","was","one","our","out","has","have","what","does","like","with","this","that","from","they","been","will","more","when","who","how","its","into","some","than","them","these","then","your","just","about","would","could","should","where","which","there","their","being","each","other"]);
           const words = event.prompt.toLowerCase()
             .replace(/[^a-z0-9\s]/g, " ")
@@ -195,7 +167,6 @@ export default definePluginEntry({
 
           if (!words.length) return;
 
-          // Search top keywords
           const allResults: SearchResult[] = [];
           const seen = new Set<string>();
           for (const word of words.slice(0, 3)) {
@@ -261,7 +232,7 @@ export default definePluginEntry({
     }
 
     // Pre-fetch auth URL during registration
-    if (!existsSync(join(homedir(), ".deeplake", "credentials.json")) && !authPending) {
+    if (!hasCredentials() && !authPending) {
       requestAuth().catch(err => {
         logger.error(`Pre-auth failed: ${err instanceof Error ? err.message : String(err)}`);
       });
